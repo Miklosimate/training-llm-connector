@@ -14,6 +14,8 @@ from garminconnect import (
     GarminConnectTooManyRequestsError,
 )
 
+from workout_plan import to_garmin_workout
+
 
 class GarminLightError(RuntimeError):
     """A safe error that can be displayed in the web UI."""
@@ -196,3 +198,35 @@ class GarminLightService:
                 "Garmin returned neither readable details nor the original FIT file."
             )
         return bundle
+
+    def upload_workout(self, workout: dict[str, Any]) -> str:
+        """Upload one explicitly reviewed workout to Garmin Connect."""
+        try:
+            uploaded = self.api.upload_workout(to_garmin_workout(workout))
+            workout_id = uploaded.get("workoutId") if isinstance(uploaded, dict) else None
+            if not workout_id:
+                raise GarminLightError("Garmin uploaded the workout but returned no workout ID.")
+            return str(workout_id)
+        except GarminConnectTooManyRequestsError as exc:
+            raise GarminLightError(
+                "Garmin rate-limited workout uploading. Try again later."
+            ) from exc
+        except (GarminConnectAuthenticationError, GarminConnectConnectionError) as exc:
+            raise GarminLightError(f"Garmin could not upload the workout: {exc}") from exc
+        except (KeyError, TypeError, ValueError) as exc:
+            raise GarminLightError(f"The workout could not be converted for Garmin: {exc}") from exc
+
+    def schedule_workout(self, workout_id: str, scheduled_date: str) -> str | None:
+        """Schedule an already uploaded workout on the Garmin calendar."""
+        try:
+            scheduled = self.api.schedule_workout(workout_id, scheduled_date)
+            schedule_id = None
+            if isinstance(scheduled, dict):
+                schedule_id = scheduled.get("workoutScheduleId") or scheduled.get("scheduleId")
+            return str(schedule_id) if schedule_id is not None else None
+        except GarminConnectTooManyRequestsError as exc:
+            raise GarminLightError(
+                "Garmin rate-limited workout scheduling. Try again later."
+            ) from exc
+        except (GarminConnectAuthenticationError, GarminConnectConnectionError) as exc:
+            raise GarminLightError(f"Garmin could not schedule the workout: {exc}") from exc

@@ -10,9 +10,9 @@
     <main>
       <header>
         <div>
-          <p class="eyebrow">Private activity exporter</p>
+          <p class="eyebrow">Private Garmin utility</p>
           <h1>Garmin Light</h1>
-          <p>Log in, choose a date, and download one complete GPT-ready activity ZIP.</p>
+          <p>Export complete activities and review GPT-generated workouts before uploading.</p>
         </div>
         {% if connected %}
           <form method="post" action="{{ url_for('logout') }}">
@@ -32,6 +32,10 @@
         <section class="card">
           {% if pending_mfa %}
             <h2>Garmin verification</h2>
+            <p class="muted">
+              Use the code from the MFA method configured on your Garmin account. This may be an
+              authenticator app rather than email.
+            </p>
             <form method="post" action="{{ url_for('mfa') }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <label for="code">Verification code</label>
@@ -112,10 +116,109 @@
         {% endif %}
       {% endif %}
 
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <h2>GPT workout prompt</h2>
+            <p class="muted">
+              Download this Markdown file and give it to GPT. It contains the accepted JSON
+              structure, supported fields, and a complete example.
+            </p>
+          </div>
+          <a class="button-link secondary" href="{{ url_for('download_workout_prompt') }}">
+            Download prompt.md
+          </a>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Upload workout plan</h2>
+        <p class="muted">
+          Upload the JSON returned by GPT. Validation does not change Garmin. Every workout must be
+          reviewed and approved separately before upload.
+        </p>
+        <form method="post" action="{{ url_for('upload_plan') }}" enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label for="plan_file">plan.json</label>
+          <input id="plan_file" name="plan_file" type="file" accept=".json,application/json" required>
+          <button type="submit">Validate and preview</button>
+        </form>
+      </section>
+
+      {% if planned_workouts %}
+        <section class="card">
+          <div class="section-heading">
+            <div>
+              <h2>Reviewed upload queue</h2>
+              <p class="muted">This queue exists only in process memory.</p>
+            </div>
+            <form method="post" action="{{ url_for('clear_plan') }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="secondary" type="submit">Clear plan</button>
+            </form>
+          </div>
+
+          <div class="workout-list">
+            {% for workout in planned_workouts %}
+              <article class="workout">
+                <div class="workout-summary">
+                  <div>
+                    <strong>{{ workout.date }} · {{ workout.name }}</strong>
+                    <p>
+                      {{ workout.sport }} · {{ workout.intensity }} ·
+                      {{ "%.1f"|format(workout.duration_minutes) }} min ·
+                      {{ workout.status }}
+                    </p>
+                  </div>
+                  {% if workout.garmin_workout_id %}
+                    <span class="status">Garmin ID {{ workout.garmin_workout_id }}</span>
+                  {% endif %}
+                </div>
+
+                {% if workout.last_error %}
+                  <div class="notice error compact">{{ workout.last_error }}</div>
+                {% endif %}
+
+                <details>
+                  <summary>Inspect complete normalized workout</summary>
+                  <pre>{{ workout|tojson(indent=2) }}</pre>
+                </details>
+
+                {% if workout.status != "published" %}
+                  <form method="post" action="{{ url_for('publish_workout', local_id=workout.local_id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <label class="checkbox">
+                      <input type="checkbox" name="reviewed" value="yes" required>
+                      I reviewed the date, duration, steps, and targets and approve uploading this
+                      workout to Garmin.
+                    </label>
+                    <label class="checkbox">
+                      <input type="checkbox" name="schedule" value="yes" checked>
+                      Also schedule it on {{ workout.date }}.
+                    </label>
+                    <button type="submit" {% if not connected %}disabled{% endif %}>
+                      {% if workout.status == "uploaded" %}
+                        Schedule existing Garmin workout
+                      {% else %}
+                        Upload approved workout
+                      {% endif %}
+                    </button>
+                    {% if not connected %}
+                      <p class="muted">Log in to Garmin before publishing.</p>
+                    {% endif %}
+                  </form>
+                {% else %}
+                  <p class="published">Uploaded and scheduled in Garmin.</p>
+                {% endif %}
+              </article>
+            {% endfor %}
+          </div>
+        </section>
+      {% endif %}
+
       <footer>
         Uses an unofficial Garmin Connect client. Keep this application private and behind HTTPS.
       </footer>
     </main>
   </body>
 </html>
-

@@ -28,12 +28,15 @@ from flask import (
 
 from exporter import full_activity_export
 from garmin_client import GarminLightError, GarminLightService, LoginResult, activity_row
+from gpt_prompt import workout_prompt
+from workout_plan import parse_uploaded_plan, validate_plan
 
 
 @dataclass
 class EphemeralSession:
     service: GarminLightService | None = None
     pending_mfa: Any | None = None
+    planned_workouts: list[dict[str, Any]] = field(default_factory=list)
     last_seen: float = field(default_factory=time.monotonic)
 
 
@@ -145,6 +148,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             connected=current.service is not None,
             pending_mfa=current.pending_mfa is not None,
             display_name=current.service.display_name if current.service else None,
+            planned_workouts=current.planned_workouts,
         )
 
     @app.get("/")
@@ -167,7 +171,11 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             )
             current.pending_mfa = result.pending_mfa
             if current.pending_mfa is not None:
-                flash("Enter the verification code Garmin sent you.", "info")
+                flash(
+                    "Garmin requested MFA. Enter the code from your configured email or "
+                    "authenticator method.",
+                    "info",
+                )
             else:
                 flash("Connected to Garmin.", "success")
             return redirect(url_for("index"))
@@ -263,6 +271,93 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             flash(str(exc), "error")
             return redirect(url_for("index"))
 
+    @app.get("/workout-prompt.md")
+    def download_workout_prompt() -> Response:
+        return send_file(
+            BytesIO(workout_prompt().encode("utf-8")),
+            mimetype="text/markdown",
+            as_attachment=True,
+            download_name="garmin_light_workout_prompt.md",
+            max_age=0,
+        )
+
+    @app.post("/plan")
+    def upload_plan() -> Response | str:
+        rejected = require_csrf()
+        if rejected:
+            return rejected
+        current = state()
+        uploaded = request.files.get("plan_file")
+        if uploaded is None or not uploaded.filename:
+            flash("Choose a plan.json file.", "error")
+            return render_home()
+        if not uploaded.filename.lower().endswith(".json"):
+            flash("The uploaded plan must be a .json file.", "error")
+            return render_home()
+        try:
+            payload = parse_uploaded_plan(uploaded.read())
+            normalized, errors = validate_plan(payload)
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return render_home()
+        if errors:
+            for error in errors:
+                flash(error, "error")
+            return render_home()
+        current.planned_workouts = normalized
+        flash(
+            f"Validated {len(normalized)} workout(s). Review each workout before uploading.",
+            "success",
+        )
+        return render_home()
+
+    @app.post("/publish/<local_id>")
+    def publish_workout(local_id: str) -> Response | str:
+        rejected = require_csrf()
+        if rejected:
+            return rejected
+        current = state()
+        if current.service is None:
+            flash("Log in to Garmin before uploading a workout.", "error")
+            return redirect(url_for("index"))
+        workout = next(
+            (item for item in current.planned_workouts if item.get("local_id") == local_id),
+            None,
+        )
+        if workout is None:
+            return Response("Unknown or expired workout.", status=404)
+        if request.form.get("reviewed") != "yes":
+            flash("Review and approve the workout before uploading it.", "error")
+            return render_home()
+        schedule = request.form.get("schedule") == "yes"
+        try:
+            workout_id = workout.get("garmin_workout_id")
+            if not workout_id:
+                workout_id = current.service.upload_workout(workout)
+                workout["garmin_workout_id"] = workout_id
+                workout["status"] = "uploaded"
+                workout["last_error"] = None
+            if schedule and workout.get("status") != "published":
+                schedule_id = current.service.schedule_workout(workout_id, workout["date"])
+                workout["garmin_schedule_id"] = schedule_id
+                workout["status"] = "published"
+            action = "uploaded and scheduled" if schedule else "uploaded"
+            flash(f"{workout['name']} was {action} in Garmin.", "success")
+            return render_home()
+        except GarminLightError as exc:
+            workout["last_error"] = str(exc)
+            flash(str(exc), "error")
+            return render_home()
+
+    @app.post("/plan/clear")
+    def clear_plan() -> Response:
+        rejected = require_csrf()
+        if rejected:
+            return rejected
+        state().planned_workouts = []
+        flash("The in-memory workout plan was cleared.", "success")
+        return redirect(url_for("index"))
+
     @app.after_request
     def security_headers(response: Response) -> Response:
         response.headers["Cache-Control"] = "no-store"
@@ -284,4 +379,3 @@ app = create_app()
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, debug=False)
-
