@@ -72,6 +72,21 @@ class GarminLightService:
     def __init__(self, api: Garmin) -> None:
         self.api = api
 
+    @staticmethod
+    def _load_profile(api: Garmin) -> None:
+        """Load profile data across garminconnect 0.3.2+ after non-MFA login."""
+        loader = getattr(api, "_load_profile_and_settings", None)
+        if callable(loader):
+            loader()
+            return
+        profile = api.client.connectapi("/userprofile-service/socialProfile")
+        if isinstance(profile, dict):
+            api.display_name = profile.get("displayName")
+            api.full_name = profile.get("fullName", "")
+        settings = api.client.connectapi(api.garmin_connect_user_settings_url)
+        if isinstance(settings, dict):
+            api.unit_system = (settings.get("userData") or {}).get("measurementSystem")
+
     @classmethod
     def login(cls, email: str, password: str) -> LoginResult:
         if not email.strip() or not password:
@@ -87,7 +102,7 @@ class GarminLightService:
                 return LoginResult(api=None, pending_mfa=api)
             # garminconnect intentionally returns before profile loading whenever
             # return_on_mfa=True, including logins that did not require MFA.
-            api._load_profile_and_settings()  # noqa: SLF001
+            cls._load_profile(api)
             api.password = None
             return LoginResult(api=api, pending_mfa=None)
         except GarminConnectTooManyRequestsError as exc:

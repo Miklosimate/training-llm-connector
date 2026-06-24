@@ -12,6 +12,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from flask import (
@@ -76,16 +77,57 @@ def _enabled(value: str | None, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _load_or_create_secret() -> str:
+    """Load a stable secret, creating one automatically for upload-only hosting."""
+    configured = os.environ.get("GARMIN_LIGHT_SECRET_KEY")
+    if configured:
+        return configured
+
+    secret_path = Path(
+        os.environ.get(
+            "GARMIN_LIGHT_SECRET_FILE",
+            str(Path(__file__).with_name(".garmin-light-secret")),
+        )
+    )
+    try:
+        existing = secret_path.read_text(encoding="utf-8").strip()
+        if len(existing) >= 32:
+            return existing
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logging.getLogger(__name__).warning("Could not read application secret: %s", exc)
+
+    generated = secrets.token_hex(32)
+    try:
+        descriptor = os.open(
+            secret_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as secret_file:
+            secret_file.write(generated)
+        return generated
+    except FileExistsError:
+        try:
+            existing = secret_path.read_text(encoding="utf-8").strip()
+            if len(existing) >= 32:
+                return existing
+        except OSError:
+            pass
+    except OSError as exc:
+        logging.getLogger(__name__).warning("Could not save application secret: %s", exc)
+
+    logging.getLogger(__name__).warning(
+        "Using a temporary application secret; browser sessions reset after app restart."
+    )
+    return generated
+
+
 def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     app = Flask(__name__)
-    configured_secret = os.environ.get("GARMIN_LIGHT_SECRET_KEY")
-    if not configured_secret:
-        configured_secret = secrets.token_hex(32)
-        logging.getLogger(__name__).warning(
-            "GARMIN_LIGHT_SECRET_KEY is unset; browser sessions will reset after app restart."
-        )
     app.config.from_mapping(
-        SECRET_KEY=configured_secret,
+        SECRET_KEY=_load_or_create_secret(),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=_enabled(

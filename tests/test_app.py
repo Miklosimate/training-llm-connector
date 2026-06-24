@@ -4,7 +4,7 @@ import re
 import zipfile
 from datetime import date
 
-from app import create_app
+from app import _load_or_create_secret, create_app
 from garmin_client import LoginResult
 
 
@@ -110,6 +110,19 @@ def test_post_requires_csrf() -> None:
     )
     response = app.test_client().post("/logout")
     assert response.status_code == 400
+
+
+def test_application_secret_is_created_and_reused(monkeypatch, tmp_path) -> None:
+    secret_file = tmp_path / ".garmin-light-secret"
+    monkeypatch.delenv("GARMIN_LIGHT_SECRET_KEY", raising=False)
+    monkeypatch.setenv("GARMIN_LIGHT_SECRET_FILE", str(secret_file))
+
+    first = _load_or_create_secret()
+    second = _load_or_create_secret()
+
+    assert len(first) == 64
+    assert second == first
+    assert secret_file.read_text() == first
 
 
 def test_prompt_plan_upload_review_and_publish(monkeypatch) -> None:

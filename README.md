@@ -3,6 +3,15 @@
 Garmin Light is a small Flask application for exporting Garmin activities and reviewing
 GPT-generated structured workouts before uploading them to Garmin.
 
+## Deployment link
+
+The production application is deployed at:
+
+<https://training.miklosifoto.hu>
+
+Use this HTTPS address to log in to Garmin, export an activity ZIP, download the GPT workout prompt,
+and review or upload a generated `plan.json`.
+
 The application:
 
 1. logs in to Garmin Connect and supports Garmin MFA;
@@ -16,6 +25,9 @@ The application:
 It does not use SQLite, save activities, cache ZIP files, or persist Garmin authentication tokens.
 Login state and the reviewed workout queue exist only in the running Python process. Restarting or
 recycling the application logs the user out and clears the queue.
+
+The Flask cookie-signing secret is created automatically in `.garmin-light-secret` on first start.
+This is application configuration only; it contains no Garmin credentials or workout data.
 
 > Garmin Light uses the community-maintained `garminconnect` package and unofficial Garmin Connect
 > endpoints. Garmin may change or rate-limit these endpoints. Keep this application private.
@@ -58,13 +70,13 @@ example.
 
 ## Requirements
 
-- Python 3.12 or newer
+- Python 3.11 or newer
 - outbound HTTPS access to Garmin Connect
 - HTTPS when deployed
 - a WSGI application host such as cPanel Passenger
 
-`garminconnect 0.3.6` requires Python 3.12 or newer. The application will not install on a cPanel
-account that only provides Python 3.11 or older.
+Garmin Light pins `garminconnect 0.3.2`, which supports Python 3.10+, but Python 3.11 or newer is
+recommended for deployment.
 
 ## Run locally
 
@@ -73,7 +85,7 @@ Open a terminal in the `garmin-light` directory.
 ### macOS or Linux
 
 ```bash
-python3.12 -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
@@ -87,7 +99,7 @@ Open <http://127.0.0.1:5000>.
 ### Windows PowerShell
 
 ```powershell
-py -3.12 -m venv .venv
+py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
@@ -114,7 +126,9 @@ ruff check .
 ## Deploy with cPanel / ugyfeladmin
 
 The deployment works when the hosting account provides cPanel's **Setup Python App** or
-**Application Manager**, Python 3.12+, Passenger/WSGI, and outbound HTTPS access.
+**Application Manager**, Python 3.11+, Passenger/WSGI, and outbound HTTPS access.
+
+For the exact no-SSH procedure, see `CPANEL_UPLOAD_ONLY.md`.
 
 ### 1. Prepare and upload the files
 
@@ -130,6 +144,7 @@ The deployed directory must contain at least:
 ```text
 garmin-light/
 ├── app.py
+├── CPANEL_UPLOAD_ONLY.md
 ├── exporter.py
 ├── garmin_client.py
 ├── gpt_prompt.py
@@ -154,11 +169,10 @@ In cPanel or ugyfeladmin:
 
 1. Open **Setup Python App**. Some installations call this **Application Manager**.
 2. Click **Create Application**.
-3. Select Python **3.12** or newer.
+3. Select Python **3.11** or newer.
 4. Set **Application root** to `garmin-light`.
-5. Select the domain or subdomain that will host the application.
-6. Set **Application URL** to `/` for a dedicated subdomain, or choose a path such as
-   `/garmin-light`.
+5. Select `training.miklosifoto.hu` as the application domain.
+6. Leave the **Application URL path** blank so the app is served from the domain root.
 7. Set **Application startup file** to `passenger_wsgi.py`.
 8. Set **Application entry point** to `application`.
 9. Create or save the application.
@@ -166,8 +180,10 @@ In cPanel or ugyfeladmin:
 The important WSGI configuration is:
 
 ```text
-Startup file: passenger_wsgi.py
-Entry point:  application
+Application URL: training.miklosifoto.hu
+URL path:       leave blank
+Startup file:   passenger_wsgi.py
+Entry point:    application
 ```
 
 ### 3. Install dependencies
@@ -179,7 +195,7 @@ cPanel **Terminal**, then install the dependencies. The exact home directory and
 will differ:
 
 ```bash
-source /home/CPANEL_USER/virtualenv/garmin-light/3.12/bin/activate
+source /home/CPANEL_USER/virtualenv/garmin-light/3.11/bin/activate
 cd /home/CPANEL_USER/garmin-light
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
@@ -191,32 +207,25 @@ If `curl-cffi` cannot be installed, the shared hosting environment is missing a 
 required system support. This normally cannot be fixed from an unprivileged cPanel account; ask the
 hosting provider or deploy on a VPS/container host.
 
-### 4. Add environment variables
+### 4. Application secret and optional environment variables
 
-Generate a secret once. You can run this locally or in cPanel Terminal:
-
-```bash
-python -c "import secrets; print(secrets.token_hex(32))"
-```
-
-Add the following variables in the Python application's environment-variable section:
+No key-generation command is required. If `GARMIN_LIGHT_SECRET_KEY` is not configured, the
+application creates this file automatically on first start:
 
 ```text
-GARMIN_LIGHT_SECRET_KEY=<paste-the-generated-value>
-GARMIN_LIGHT_SECURE_COOKIE=1
-GARMIN_LIGHT_SESSION_TTL=3600
-GARMIN_LIGHT_MAX_SESSIONS=8
+/home/CPANEL_USER/garmin-light/.garmin-light-secret
 ```
 
-Keep `GARMIN_LIGHT_SECRET_KEY` stable across application restarts. Changing it invalidates existing
-browser cookies. Do not commit or publish the value.
+The file is created with owner-only permissions where supported. Keep it in place so browser
+sessions remain valid across Passenger restarts.
 
-Environment-variable meanings:
+Environment variables remain optional overrides:
 
 | Variable | Purpose |
 | --- | --- |
-| `GARMIN_LIGHT_SECRET_KEY` | Signs the browser session cookie. Required in production. |
-| `GARMIN_LIGHT_SECURE_COOKIE` | Must be `1` when the site uses HTTPS. |
+| `GARMIN_LIGHT_SECRET_KEY` | Overrides the automatically generated file secret. |
+| `GARMIN_LIGHT_SECRET_FILE` | Changes the automatic secret-file location. |
+| `GARMIN_LIGHT_SECURE_COOKIE` | Defaults to `1`; use `0` only for local HTTP development. |
 | `GARMIN_LIGHT_SESSION_TTL` | Inactivity timeout in seconds. Default: `3600`. |
 | `GARMIN_LIGHT_MAX_SESSIONS` | Maximum number of in-memory sessions. Default: `64`. |
 
@@ -256,7 +265,7 @@ variables.
 
 Then verify:
 
-1. the page loads over HTTPS;
+1. <https://training.miklosifoto.hu> loads over HTTPS;
 2. Garmin login works;
 3. MFA works if enabled;
 4. selecting a date shows that day's activities;
@@ -285,7 +294,7 @@ Do not overwrite the production `GARMIN_LIGHT_SECRET_KEY` when updating.
 
 Check the Python application log or cPanel error log. Common causes are:
 
-- Python is older than 3.12;
+- Python is older than 3.11;
 - dependencies were not installed in the application's virtual environment;
 - `passenger_wsgi.py` or the `application` entry point is configured incorrectly;
 - the uploaded directory structure is wrong.
