@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Garmin Light</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">Private activity exporter</p>
+          <h1>Garmin Light</h1>
+          <p>Log in, choose a date, and download one complete GPT-ready activity ZIP.</p>
+        </div>
+        {% if connected %}
+          <form method="post" action="{{ url_for('logout') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="secondary" type="submit">Log out</button>
+          </form>
+        {% endif %}
+      </header>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+          <div class="notice {{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endwith %}
+
+      {% if not connected %}
+        <section class="card">
+          {% if pending_mfa %}
+            <h2>Garmin verification</h2>
+            <form method="post" action="{{ url_for('mfa') }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <label for="code">Verification code</label>
+              <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required>
+              <button type="submit">Verify code</button>
+            </form>
+          {% else %}
+            <h2>Garmin login</h2>
+            <p class="muted">
+              Credentials and Garmin tokens are not written to disk. Closing or restarting the
+              application invalidates the session.
+            </p>
+            <form method="post" action="{{ url_for('login') }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <label for="email">Garmin email</label>
+              <input id="email" name="email" type="email" autocomplete="username" required>
+              <label for="password">Garmin password</label>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                required
+              >
+              <button type="submit">Connect</button>
+            </form>
+          {% endif %}
+        </section>
+      {% else %}
+        <section class="card">
+          <p class="connected">Connected as {{ display_name }}</p>
+          <h2>Select activity date</h2>
+          <form class="date-form" method="post" action="{{ url_for('activities') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label for="date">Date</label>
+            <input
+              id="date"
+              name="date"
+              type="date"
+              value="{{ selected_date }}"
+              max="{{ today }}"
+              required
+            >
+            <button type="submit">Fetch activities</button>
+          </form>
+        </section>
+
+        {% if activities is not none %}
+          <section class="card">
+            <h2>Activities on {{ selected_date }}</h2>
+            {% if activities %}
+              <div class="activity-list">
+                {% for activity in activities %}
+                  <article class="activity">
+                    <div>
+                      <strong>{{ activity.name }}</strong>
+                      <p>
+                        {{ activity.type }}
+                        {% if activity.distance_km is not none %}
+                          · {{ "%.2f"|format(activity.distance_km) }} km
+                        {% endif %}
+                        {% if activity.duration_hours is not none %}
+                          · {{ "%.2f"|format(activity.duration_hours) }} h
+                        {% endif %}
+                      </p>
+                    </div>
+                    <form method="post" action="{{ url_for('download', activity_id=activity.id) }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                      <button type="submit">Download full ZIP</button>
+                    </form>
+                  </article>
+                {% endfor %}
+              </div>
+            {% else %}
+              <p>No activities found.</p>
+            {% endif %}
+          </section>
+        {% endif %}
+      {% endif %}
+
+      <footer>
+        Uses an unofficial Garmin Connect client. Keep this application private and behind HTTPS.
+      </footer>
+    </main>
+  </body>
+</html>
+
